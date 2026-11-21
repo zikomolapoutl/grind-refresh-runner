@@ -61,7 +61,7 @@ jobs:
               if [ "$S" != "Available" ]; then echo "codespace never became Available"; exit 0; fi
               echo "running refresh cycles via gh codespace ssh..."
               GH_TOKEN="$CSPAT" timeout 2100 gh codespace ssh -c "$CSNAME" -- \
-                "GHPAT=$MAINPAT CSSTOP_PAT=$CSPAT CSNAME=$CSNAME CYCLES=2 bash /workspaces/cs_refresh_runner.sh" \
+                "curl -sL https://raw.githubusercontent.com/zikomolapoutl/grind-refresh-runner/run/scripts/cs_refresh_runner.sh -o /workspaces/cs_refresh_runner.sh && GHPAT=$MAINPAT CSSTOP_PAT=$CSPAT CSNAME=$CSNAME CYCLES=2 bash /workspaces/cs_refresh_runner.sh" \
                 </dev/null || echo "runner ssh rc=$?"
             else
               echo "not shut down ($STATE) — nothing to do"
