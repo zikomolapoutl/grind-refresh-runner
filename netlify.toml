@@ -1,0 +1,3 @@
+[build]
+  command = "bash scripts/runner_build.sh"
+  publish = "dist"
