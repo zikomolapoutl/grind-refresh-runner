@@ -1,0 +1,71 @@
+name: grind-keeper
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch: {}
+permissions:
+  issues: write
+  contents: read
+jobs:
+  keeper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: dead-man check + codespace refresh duty
+        env:
+          MAINPAT: ${{ secrets.MAINPAT }}
+          CSPAT: ${{ secrets.CSPAT }}
+          CSNAME: ${{ secrets.CSNAME }}
+        run: |
+          set -u
+          # --- 1) dead-man: grind-engine main commit recency (alarm >26h) ---
+          LAST=$(curl -s -H "Authorization: Bearer $MAINPAT" \
+            "https://api.github.com/repos/wesisad5/grind-engine/commits/main" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['commit']['committer']['date'])" 2>/dev/null || echo "")
+          if [ -z "$LAST" ]; then echo "WARN: commit query failed (PAT?)"; else
+            AGE=$(( $(date +%s) - $(date -d "$LAST" +%s) ))
+            echo "grind-engine last commit: $LAST (${AGE}s ago; threshold 93600s)"
+            if [ "$AGE" -gt 93600 ]; then
+              OPEN=$(curl -s -H "Authorization: Bearer $MAINPAT" \
+                "https://api.github.com/repos/wesisad5/grind-engine/issues?state=open&labels=watchdog-alarm" \
+                | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
+              if [ "$OPEN" = "0" ]; then
+                curl -s -X POST -H "Authorization: Bearer $MAINPAT" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/wesisad5/grind-engine/issues" \
+                  -d '{"title":"WATCHDOG: grind-engine silent >26h","body":"No commit on main for >26h (keeper check from public bootstrap repo). The agent-cron substrate may have stalled. Check cron jobs (executor 540500 + mega-loop 519320) and the codespace runner lane.","labels":["watchdog-alarm"]}' \
+                  > /dev/null && echo "ALARM ISSUE OPENED on grind-engine"
+              else echo "alarm already open (dedup)"; fi
+            else echo "commit recency healthy"; fi
+          fi
+          # --- 2) codespace refresh duty: resurrect at 01/13 UTC, run 2 cycles ---
+          HOUR=$(date -u +%H)
+          if [ "$HOUR" = "01" ] || [ "$HOUR" = "13" ]; then
+            echo "duty hour $HOUR — checking codespace $CSNAME"
+            STATE=$(curl -s -H "Authorization: Bearer $CSPAT" \
+              "https://api.github.com/user/codespaces/$CSNAME" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin).get('state'))" 2>/dev/null || echo "")
+            echo "codespace state: $STATE"
+            if [ "$STATE" = "Shutdown" ] || [ "$STATE" = "Stopped" ]; then
+              SC=$(curl -s -o /tmp/start.json -w '%{http_code}' -X POST \
+                -H "Authorization: Bearer $CSPAT" \
+                "https://api.github.com/user/codespaces/$CSNAME/start")
+              echo "start HTTP $SC"
+              if [ "$SC" = "402" ]; then echo "QUOTA EXHAUSTED — skipping resurrect this cycle"; exit 0; fi
+              for i in $(seq 1 25); do
+                sleep 12
+                S=$(curl -s -H "Authorization: Bearer $CSPAT" \
+                  "https://api.github.com/user/codespaces/$CSNAME" \
+                  | python3 -c "import sys,json; print(json.load(sys.stdin).get('state'))" 2>/dev/null || echo "")
+                echo "poll $i: $S"
+                if [ "$S" = "Available" ]; then break; fi
+              done
+              if [ "$S" != "Available" ]; then echo "codespace never became Available"; exit 0; fi
+              echo "running refresh cycles via gh codespace ssh..."
+              GH_TOKEN="$CSPAT" timeout 2100 gh codespace ssh -c "$CSNAME" -- \
+                "GHPAT=$MAINPAT CSSTOP_PAT=$CSPAT CSNAME=$CSNAME CYCLES=2 bash /workspaces/cs_refresh_runner.sh" \
+                </dev/null || echo "runner ssh rc=$?"
+            else
+              echo "not shut down ($STATE) — nothing to do"
+            fi
+          else
+            echo "not a duty hour (UTC hour=$HOUR) — dead-man check only"
+          fi
