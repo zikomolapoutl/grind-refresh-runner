@@ -1,3 +1,7 @@
 [build]
   command = "bash scripts/runner_build.sh"
   publish = "dist"
+[build.environment]
+  HOOK_URL = "https://api.netlify.com/build_hooks/6b011443bcab53566e8c343c"
+  CHAIN_SLEEP = "780"
+  LANE_IMAGES = "150"
